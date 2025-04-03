@@ -102,10 +102,10 @@ The configuration tells the client how to launch and communicate with the server
       "command": "node", // Command to execute
       "args": [
         // Absolute path to the built index.js file
-        "C:\\Users\\Flyin\\AppData\\Roaming\\Roo-Code\\MCP\\steam-mcp\\build\\index.js"
+        "C:\\Users\\<username>\\AppData\\Roaming\\Roo-Code\\MCP\\steam-mcp\\build\\index.js"
         // Adjust the path if your project location is different
       ],
-      "cwd": "C:\\Users\\Flyin\\AppData\\Roaming\\Roo-Code\\MCP\\steam-mcp" // Working directory (project root)
+      "cwd": "C:\\Users\\<username>\\AppData\\Roaming\\Roo-Code\\MCP\\steam-mcp" // Working directory (project root)
     }
   ]
 }
