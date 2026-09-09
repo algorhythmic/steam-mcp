@@ -46,7 +46,7 @@ The server requires the following environment variable to be set:
 
 *   **`STEAM_API_KEY` (Required):** Your Steam Web API key. Obtain one from the [Steam Developer website](https://steamcommunity.com/dev/apikey). The server will not function without this key.
 
-This project uses a `.env` file in the project root directory to load the API key. Create a file named `.env` in the `steam-mcp` directory and add the following line:
+Set `STEAM_API_KEY` in your MCP client's environment or your shell. You can also copy `.env.example` to `.env` in the project root and set the key there. The `.env` file is optional; an existing environment variable takes precedence.
 
 ```dotenv
 STEAM_API_KEY=YOUR_API_KEY_HERE
