@@ -4,6 +4,9 @@
   "description": "A Model Context Protocol server",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
   "bin": {
     "steam-mcp": "./build/index.js"
   },
@@ -11,6 +14,7 @@
     "build"
   ],
   "scripts": {
+    "start": "node build/index.js",
     "test": "npm run build && node --test --test-isolation=none test/*.test.mjs",
     "build": "tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
     "prepare": "npm run build",

@@ -9,7 +9,7 @@ It communicates with the MCP client via standard input/output (stdio) using the 
 ## Technology Stack
 
 *   **Language:** TypeScript
-*   **Runtime:** Node.js (v18+ recommended)
+*   **Runtime:** Node.js (v24 LTS or newer)
 *   **HTTP Client:** Axios
 *   **Environment Variables:** Dotenv
 *   **MCP SDK:** `@modelcontextprotocol/sdk`
@@ -18,23 +18,23 @@ It communicates with the MCP client via standard input/output (stdio) using the 
 ## Setup and Installation
 
 1.  **Prerequisites:**
-    *   Node.js (v18 or higher recommended).
+    *   Node.js (v24 LTS or newer).
     *   npm (usually included with Node.js).
 
 2.  **Clone the repository (if you haven't already):**
     ```bash
-    git clone <repository-url> # Replace with your repository URL
+    git clone https://github.com/algorhythmic/steam-mcp.git
     cd steam-mcp
     ```
 
 3.  **Install dependencies:**
     ```bash
-    npm install
+    npm ci
     ```
 
 4.  **Configure Environment Variables:** See the section below.
 
-5.  **Build the project:**
+5.  **Rebuild after source changes:** `npm ci` already builds the project. To rebuild later:
     ```bash
     npm run build
     ```
@@ -79,43 +79,68 @@ This server provides the following tools based on the Steam Web API:
 *   `getSupportedApiList`: Retrieves the list of supported Steam Web API interfaces and methods.
 *   `getGlobalAchievementPercentages`: Retrieves global achievement completion percentages for a game.
 
-## Connecting a Local MCP Client (e.g., Roo)
+## Connecting Roo Code
 
-To connect a local MCP client, such as the Roo VS Code extension, to this server, you need to configure the client's `mcp.json` file. This file typically resides in a `.roo` directory within your project or user settings.
+Add a named entry under `mcpServers` in your project's `.roo/mcp.json`, or use Roo's global MCP settings. See the [Roo configuration reference](https://roocodeinc.github.io/Roo-Code/features/mcp/using-mcp-in-roo/).
 
-The configuration tells the client how to launch and communicate with the server using standard input/output.
-
-1.  **Ensure the project is built:** Run `npm run build`.
-2.  **Locate or create your `mcp.json` file:** This might be in `.roo/mcp.json` in your workspace or a global configuration location.
-3.  **Add the server configuration:** Add an entry to the `servers` array in `mcp.json`.
-
-**Example `mcp.json` entry:**
+Linux/macOS example (replace the absolute path and API key):
 
 ```json
 {
-  "servers": [
-    // ... other server configurations ...
-    {
-      "name": "steam-local-stdio", // Choose a descriptive name
-      "type": "stdio",
-      "enabled": true,
-      "command": "node", // Command to execute
-      "args": [
-        // Absolute path to the built index.js file
-        "C:\\Users\\<username>\\AppData\\Roaming\\Roo-Code\\MCP\\steam-mcp\\build\\index.js"
-        // Adjust the path if your project location is different
-      ],
-      "cwd": "C:\\Users\\<username>\\AppData\\Roaming\\Roo-Code\\MCP\\steam-mcp" // Working directory (project root)
+  "mcpServers": {
+    "steam": {
+      "command": "node",
+      "args": ["/absolute/path/to/steam-mcp/build/index.js"],
+      "env": {
+        "STEAM_API_KEY": "YOUR_STEAM_API_KEY_HERE"
+      },
+      "disabled": false
     }
-  ]
+  }
 }
 ```
 
-*   **`name`**: A unique identifier for this server connection (e.g., `steam`).
-*   **`type`**: Must be `stdio`.
-*   **`enabled`**: Set to `true` to activate the connection.
-*   **`command`**: The command to run the Node.js runtime (`node`).
-*   **`args`**: An array containing the absolute path to the compiled server script (`build/index.js`). **Important:** Ensure this path is correct for your system. Use double backslashes (`\\`) for paths in the JSON string on Windows.
-*   **`cwd`**: The absolute path to the project's root directory, where the server should be run from. **Important:** Ensure this path is correct for your system.
+Windows example:
 
-Once configured and enabled, your MCP client should be able to launch and communicate with this server via stdio.
+```json
+{
+  "mcpServers": {
+    "steam": {
+      "command": "node",
+      "args": ["C:\\Users\\YourName\\Projects\\steam-mcp\\build\\index.js"],
+      "env": {
+        "STEAM_API_KEY": "YOUR_STEAM_API_KEY_HERE"
+      },
+      "disabled": false
+    }
+  }
+}
+```
+
+If you use the project's `.env` file, omit the `env` object. The server locates `.env` relative to its installation, so setting `cwd` is unnecessary. Keep configurations containing real keys out of version control. Other MCP clients may use a different configuration format; use their documented stdio setup with the same command, absolute script path, and environment variable.
+
+## First calls
+
+After connecting, try “How many people are playing Dota 2?” The corresponding tool call is:
+
+```json
+{"name":"getCurrentPlayers","arguments":{"appid":570}}
+```
+
+To retrieve store information:
+
+```json
+{"name":"getAppDetails","arguments":{"appids":[570,730],"country":"US"}}
+```
+
+An AppID is the number following `/app/` in a Steam store URL. Player tools require a SteamID64 supplied as a **string**, preserving all its digits.
+
+## Development and troubleshooting
+
+- Run `npm test` for the TypeScript build and mocked MCP integration tests; no API key is needed for tests.
+- Run `npm start` to start the built stdio server, or `npm run inspector` for an interactive MCP inspector.
+- If Node cannot be found by your client, set `command` to the absolute path of your Node executable.
+- If `build/index.js` is missing, run `npm ci` from the repository root.
+- If `STEAM_API_KEY` is missing, set it in the client configuration or the optional `.env` file and restart the server.
+- If Steam denies access, check the key and the target profile's game-details visibility. Some games do not expose stats or achievements.
+- A server waiting quietly in a terminal is normal: stdio expects an MCP client. Diagnostic messages go to stderr; stdout is reserved for protocol messages.
