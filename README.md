@@ -150,3 +150,17 @@ An AppID is the number following `/app/` in a Steam store URL. Player tools requ
 Store-detail batches accept at most 20 IDs and fetch duplicate IDs once. Each Steam host has a shared limit of four active requests. HTTP operations have a 10-second deadline including queueing and retries; each tool call has a 15-second overall deadline and follows client cancellation. Transient network errors, HTTP 429, and selected 5xx responses receive at most two retries, respecting `Retry-After`. Responses are limited to 2 MiB.
 
 Tool inputs are validated before contacting Steam. AppIDs must be positive 32-bit integers; SteamID64 values must be 17-digit strings. News counts are 1–100 and `maxlength` is 0–10,000. Global-stat requests accept 1–100 nonempty names and Unix timestamps in seconds, with `end_date` on or after `start_date`. Country codes use two letters and are normalized to uppercase. Unexpected argument names are rejected with a field-specific error.
+
+## Batch results
+
+`getAppDetails` preserves AppID-keyed entries and includes a `summary` of distinct requested IDs, successes, and failures:
+
+```json
+{
+  "570": {"success": true, "data": {"name": "Dota 2"}},
+  "730": {"success": false, "error": "No store details are available for this app in the selected country."},
+  "summary": {"requested": 2, "succeeded": 1, "failed": 1}
+}
+```
+
+Partial batches retain their successful entries. If every lookup fails, the MCP response has `isError: true` and includes the per-app reasons and summary. Explicit upstream failures and malformed success responses are returned as tool errors rather than causing client-side schema errors.

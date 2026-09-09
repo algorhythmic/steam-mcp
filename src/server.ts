@@ -1,3 +1,4 @@
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv-provider.js';
 import { SteamHttpClient, type HttpOptions } from './http.js';
 import { Catalog } from './catalog.js';
 import { toolDefinitions } from './tools.js';
@@ -13,6 +14,12 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import axios, { type AxiosInstance } from 'axios';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+
+const schemaValidator = new AjvJsonSchemaValidator();
+const outputValidators = new Map(toolDefinitions.flatMap(tool => tool.outputSchema
+    ? [[tool.name, schemaValidator.getValidator(tool.outputSchema)] as const] : []));
+
+type AppDetailsResult = { success: true; data: Record<string, unknown> } | { success: false; error: string };
 
 interface GetCurrentPlayersApiResponse {
     response: { player_count: number; result: number };
@@ -33,6 +40,7 @@ type McpToolSuccessResponse = {
 type McpToolErrorResponse = {
     content: McpToolResponseContent[];
     isError: true;
+    structuredContent?: Record<string, unknown>;
     error?: { code: ErrorCode; message: string }; // Optional structured error
 };
 
@@ -96,38 +104,46 @@ export class SteamMcpServer {
             const signal = AbortSignal.any([extra.signal, deadline.signal]);
 
             try {
-                switch (toolName) {
-                    case 'getCurrentPlayers':
-                        return await this.handleGetCurrentPlayers(parseToolArgs('getCurrentPlayers', args), signal);
-                    case 'getAppList':
-                        return await this.handleGetAppList(args, signal);
-                    case 'getGameSchema':
-                        return await this.handleGetGameSchema(parseToolArgs('getGameSchema', args), signal);
-                    case 'getAppDetails':
-                        return await this.handleGetAppDetails(parseToolArgs('getAppDetails', args), signal);
-                    case 'getGameNews':
-                        return await this.handleGetGameNews(parseToolArgs('getGameNews', args), signal);
-                    case 'getPlayerAchievements':
-                        return await this.handleGetPlayerAchievements(parseToolArgs('getPlayerAchievements', args), signal);
-                    case 'getUserStatsForGame':
-                        return await this.handleGetUserStatsForGame(parseToolArgs('getUserStatsForGame', args), signal);
-                    case 'getGlobalStatsForGame':
-                        return await this.handleGetGlobalStatsForGame(parseToolArgs('getGlobalStatsForGame', args), signal);
-                    case 'getSupportedApiList':
-                        return await this.handleGetSupportedApiList(parseToolArgs('getSupportedApiList', args), signal); // Pass args for consistency, though unused
-                    case 'getGlobalAchievementPercentages':
-                        return await this.handleGetGlobalAchievementPercentages(parseToolArgs('getGlobalAchievementPercentages', args), signal);
-                    // --- Add cases for other tools here ---
-                    default:
-                        // Use MethodNotFound for unknown tools
-                        throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${toolName}`);
+                const result = await this.executeTool(toolName, args, signal);
+                if (result.structuredContent && !outputValidators.get(toolName)?.(result.structuredContent).valid) {
+                    throw new McpError(ErrorCode.InternalError, `Steam returned incomplete or unexpected data for '${toolName}'. The requested data may be unavailable; try again later.`);
                 }
+                return result;
             } catch (error) {
                 // Centralized error handling
                 logError(toolName, error, this.apiKey);
                 return this.formatErrorResponse(error, toolName);
             } finally { clearTimeout(timer); }
         });
+    }
+
+    private async executeTool(toolName: string, args: unknown, signal: AbortSignal): Promise<McpToolResponse> {
+        switch (toolName) {
+            case 'getCurrentPlayers':
+                return await this.handleGetCurrentPlayers(parseToolArgs('getCurrentPlayers', args), signal);
+            case 'getAppList':
+                return await this.handleGetAppList(args, signal);
+            case 'getGameSchema':
+                return await this.handleGetGameSchema(parseToolArgs('getGameSchema', args), signal);
+            case 'getAppDetails':
+                return await this.handleGetAppDetails(parseToolArgs('getAppDetails', args), signal);
+            case 'getGameNews':
+                return await this.handleGetGameNews(parseToolArgs('getGameNews', args), signal);
+            case 'getPlayerAchievements':
+                return await this.handleGetPlayerAchievements(parseToolArgs('getPlayerAchievements', args), signal);
+            case 'getUserStatsForGame':
+                return await this.handleGetUserStatsForGame(parseToolArgs('getUserStatsForGame', args), signal);
+            case 'getGlobalStatsForGame':
+                return await this.handleGetGlobalStatsForGame(parseToolArgs('getGlobalStatsForGame', args), signal);
+            case 'getSupportedApiList':
+                return await this.handleGetSupportedApiList(parseToolArgs('getSupportedApiList', args), signal); // Pass args for consistency, though unused
+            case 'getGlobalAchievementPercentages':
+                return await this.handleGetGlobalAchievementPercentages(parseToolArgs('getGlobalAchievementPercentages', args), signal);
+            // --- Add cases for other tools here ---
+            default:
+                // Use MethodNotFound for unknown tools
+                throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${toolName}`);
+        }
     }
 
     // --- Tool Handler Implementations ---
@@ -175,49 +191,28 @@ export class SteamMcpServer {
         const countryCode = args.country;
         const appDetailsUrl = 'https://store.steampowered.com/api/appdetails'; // Different base URL
 
-        // Use Promise.allSettled to handle potential errors for individual appids
-        const results = await Promise.allSettled(
-            appIds.map(async (appid) => {
-                try {
-                    const params: { appids: number; cc?: string } = { appids: appid };
-                    if (countryCode) {
-                        params.cc = countryCode;
-                    }
-                    // Make request *without* the default axiosInstance base URL and API key
-                    const response = await this.storeInstance.get(appDetailsUrl, { params, signal });
-
-                    // The appdetails endpoint wraps the result with the appid as the key
-                    const appData = response.data?.[appid.toString()];
-
-                    if (appData?.success) {
-                        return { [appid]: appData }; // Return successful data keyed by appid
-                    } else {
-                        // Handle cases where the API indicates failure for this specific appid
-                        return { [appid]: { success: false, error: `Steam API reported failure for appid ${appid}. ` } };
-                    }
-                } catch (error) {
-                     // Handle network/request errors for this specific appid
-                    const errorMessage = describeError(error, 'getAppDetails', this.apiKey);
-                    logError(`getAppDetails:${appid}`, error, this.apiKey);
-                    return { [appid]: { success: false, error: errorMessage } };
+        const entries = await Promise.all(appIds.map(async (appid): Promise<[string, AppDetailsResult]> => {
+            try {
+                const response = await this.storeInstance.get(appDetailsUrl, {
+                    params: { appids: appid, ...(countryCode ? { cc: countryCode } : {}) }, signal,
+                });
+                const appData = response.data?.[appid.toString()];
+                if (appData?.success === true && appData.data && typeof appData.data === 'object' && !Array.isArray(appData.data)) {
+                    return [String(appid), { success: true, data: appData.data }];
                 }
-            })
-        );
-
-        // Combine results into a single object keyed by appid
-        const combinedResults = results.reduce((acc, result) => {
-            if (result.status === 'fulfilled') {
-                Object.assign(acc, result.value);
-            } else {
-                // This case should ideally be handled within the individual try/catch,
-                // but log if an unexpected rejection occurs at the Promise.allSettled level.
-                logError('getAppDetails', result.reason, this.apiKey);
-                // We might need a way to represent this top-level error if needed.
+                return [String(appid), { success: false, error: `No store details are available for appid ${appid}. Check the AppID and selected country.` }];
+            } catch (error) {
+                logError(`getAppDetails:${appid}`, error, this.apiKey);
+                return [String(appid), { success: false, error: describeError(error, 'getAppDetails', this.apiKey) }];
             }
-            return acc;
-        }, {});
-
-        return this.formatSuccessResponse(combinedResults);
+        }));
+        const succeeded = entries.filter(([, result]) => result.success).length;
+        const data = {
+            ...Object.fromEntries(entries),
+            summary: { requested: appIds.length, succeeded, failed: appIds.length - succeeded },
+        };
+        const response = this.formatSuccessResponse(data);
+        return succeeded === 0 ? { ...response, isError: true } : response;
     }
 
     private async handleGetGameNews(args: ToolArgs<'getGameNews'>, signal: AbortSignal): Promise<McpToolResponse> {
@@ -295,19 +290,10 @@ export class SteamMcpServer {
             }
         );
 
-        // This endpoint throws an HTTP error (like 500) for private profiles or invalid IDs,
-        // rather than returning a JSON body with success:false.
-        // The central Axios error handler should catch these.
-        // We just need to ensure the expected structure exists on success.
-        if (!response.data?.playerstats) {
-             throw new McpError(
-                ErrorCode.InternalError,
-                `Steam API did not return the expected 'playerstats' structure for getUserStatsForGame (appid: ${appId}, steamid: ${steamId}).`
-            );
+        if (!response.data?.playerstats || response.data.playerstats.success === false) {
+            throw new McpError(ErrorCode.InternalError,
+                response.data?.playerstats?.error ?? `Steam did not return user stats for appid ${appId}. Check the profile's game-details visibility.`);
         }
-
-        // Unlike GetPlayerAchievements, this endpoint doesn't seem to have a 'success' boolean inside playerstats.
-        // Assume success if the request didn't throw an error and playerstats exists.
 
         return this.formatSuccessResponse(response.data);
     }

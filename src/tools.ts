@@ -89,14 +89,32 @@ export const toolDefinitions: Tool[] = [
         // Based on appdetails endpoint (structure varies per appid)
         outputSchema: {
             type: 'object',
-            description: 'A dictionary where keys are AppIDs (as strings) and values are app detail objects or error indicators.',
+            description: 'AppID-keyed results with a summary counting distinct requested IDs, successes, and failures.',
+            properties: {
+                summary: {
+                    type: 'object',
+                    properties: {
+                        requested: { type: 'integer', minimum: 1 },
+                        succeeded: { type: 'integer', minimum: 0 },
+                        failed: { type: 'integer', minimum: 0 },
+                    },
+                    required: ['requested', 'succeeded', 'failed'],
+                    additionalProperties: false,
+                },
+            },
+            required: ['summary'],
             additionalProperties: {
                 type: 'object',
                 properties: {
                     success: { type: 'boolean' },
                     data: { type: 'object' }, // Define more specific structure if needed, but it varies
                     error: { type: 'string', description: 'Error message if success is false for this appid.' }
-                }
+                },
+                required: ['success'],
+                oneOf: [
+                    { properties: { success: { const: true } }, required: ['data'] },
+                    { properties: { success: { const: false } }, required: ['error'] },
+                ],
             }
         }
     }, // End of getAppDetails definition

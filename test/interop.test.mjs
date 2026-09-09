@@ -7,7 +7,7 @@ const cases = [
     ['getCurrentPlayers', { appid: 570 }, { response: { player_count: 42, result: 1 } }],
     ['getAppList', {}, { applist: { apps: [{ appid: 570, name: 'Dota 2' }] }, has_more: false }],
     ['getGameSchema', { appid: 570 }, { game: { gameName: 'Dota 2', gameVersion: '1', availableGameStats: {} } }],
-    ['getAppDetails', { appids: [570] }, { 570: { success: true, data: { name: 'Dota 2' } } }],
+    ['getAppDetails', { appids: [570] }, { 570: { success: true, data: { name: 'Dota 2' } }, summary: { requested: 1, succeeded: 1, failed: 0 } }],
     ['getGameNews', { appid: 570 }, { appnews: { appid: 570, newsitems: [], count: 0 } }],
     ['getPlayerAchievements', { appid: 570, steamid }, { playerstats: { steamID: steamid, gameName: 'Dota 2', success: true, achievements: [] } }],
     ['getUserStatsForGame', { appid: 570, steamid }, { playerstats: { steamID: steamid, gameName: 'Dota 2', stats: [] } }],
