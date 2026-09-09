@@ -1,3 +1,4 @@
+import { describeError, logError } from './errors.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
@@ -141,7 +142,7 @@ export class SteamMcpServer {
     private axiosInstance: AxiosInstance;
     private storeInstance: AxiosInstance;
 
-    constructor(apiKey: string, clients: { webApi?: AxiosInstance; store?: AxiosInstance } = {}) {
+    constructor(private readonly apiKey: string, clients: { webApi?: AxiosInstance; store?: AxiosInstance } = {}) {
         this.server = new Server(
             {
                 // Server metadata
@@ -168,7 +169,7 @@ export class SteamMcpServer {
         this.setupToolHandlers();
 
         // Basic error handling and graceful shutdown
-        this.server.onerror = (error) => console.error('[MCP Error]', error);
+        this.server.onerror = (error) => logError('MCP', error, this.apiKey);
 
     }
 
@@ -654,7 +655,7 @@ export class SteamMcpServer {
                 }
             } catch (error) {
                 // Centralized error handling
-                console.error(`[${toolName} Error]`, error); // Log the raw error
+                logError(toolName, error, this.apiKey);
                 return this.formatErrorResponse(error, toolName, args);
             }
         });
@@ -738,20 +739,12 @@ export class SteamMcpServer {
                         return { [appid]: appData }; // Return successful data keyed by appid
                     } else {
                         // Handle cases where the API indicates failure for this specific appid
-                        return { [appid]: { success: false, error: `Steam API reported failure for appid ${appid}. Data: ${JSON.stringify(appData)}` } };
+                        return { [appid]: { success: false, error: `Steam API reported failure for appid ${appid}. ` } };
                     }
                 } catch (error) {
                      // Handle network/request errors for this specific appid
-                    let errorMessage = `Failed to fetch details for appid ${appid}`;
-                    if (axios.isAxiosError(error)) {
-                        errorMessage += `: ${error.message}`;
-                        if (error.response) {
-                             errorMessage += ` (Status: ${error.response.status})`;
-                        }
-                    } else if (error instanceof Error) {
-                        errorMessage += `: ${error.message}`;
-                    }
-                    console.error(`[getAppDetails Error for ${appid}]`, error); // Log specific error
+                    const errorMessage = describeError(error, 'getAppDetails', this.apiKey);
+                    logError(`getAppDetails:${appid}`, error, this.apiKey);
                     return { [appid]: { success: false, error: errorMessage } };
                 }
             })
@@ -764,7 +757,7 @@ export class SteamMcpServer {
             } else {
                 // This case should ideally be handled within the individual try/catch,
                 // but log if an unexpected rejection occurs at the Promise.allSettled level.
-                console.error("[getAppDetails Promise.allSettled Rejection]", result.reason);
+                logError('getAppDetails', result.reason, this.apiKey);
                 // We might need a way to represent this top-level error if needed.
             }
             return acc;
@@ -985,52 +978,12 @@ private async handleGetGlobalAchievementPercentages(args: any): Promise<McpToolR
     }
 
     private formatErrorResponse(error: unknown, toolName: string, args: any): McpToolErrorResponse {
-        let errorMessage = `An unknown error occurred while executing tool '${toolName}'.`;
-        let errorCode = ErrorCode.InternalError;
-        let mcpErrorData = undefined; // For structured error data
-
-        if (error instanceof McpError) {
-            // If it's already an McpError (e.g., from validation), use its details
-            errorCode = error.code;
-            errorMessage = error.message;
-            // We could potentially add error.data here if the SDK supported it easily
-        } else if (axios.isAxiosError(error)) {
-            errorMessage = `Steam API request failed during '${toolName}': ${error.message}`;
-            mcpErrorData = { type: "SteamApiError", details: error.message }; // Basic details
-
-            if (error.response) {
-                errorMessage += ` (Status: ${error.response.status})`;
-                mcpErrorData.details += ` (Status: ${error.response.status}, Data: ${JSON.stringify(error.response.data)})`; // Include response data if available
-
-                // Map HTTP status codes
-                if (error.response.status === 400 || error.response.status === 404) {
-                    errorCode = ErrorCode.InvalidParams; // Often indicates bad input like invalid AppID
-                    errorMessage = `Steam API request failed (Status: ${error.response.status}). Check arguments for '${toolName}' (e.g., appid: ${args?.appid}).`;
-                } else if (error.response.status === 401 || error.response.status === 403) {
-                     errorCode = ErrorCode.InternalError; // Use InternalError, message clarifies permission issue
-                     errorMessage = `Steam API request failed (Status: ${error.response.status}). Check API key or profile visibility.`;
-                     mcpErrorData.type = "PermissionError";
-                } else if (error.response.status >= 500) {
-                    errorCode = ErrorCode.InternalError; // Treat 5xx as internal/upstream issues
-                    mcpErrorData.type = "UpstreamError";
-                }
-            } else if (error.request) {
-                // Network error (no response received)
-                errorCode = ErrorCode.InternalError; // SDK lacks specific NetworkError code
-                errorMessage = `Network error contacting Steam API during '${toolName}': ${error.message}`;
-                mcpErrorData = { type: "NetworkError", details: error.message };
-            }
-        } else if (error instanceof Error) {
-            // Generic JavaScript error
-            errorMessage = `Internal server error during '${toolName}': ${error.message}`;
-            mcpErrorData = { type: "InternalServerError", details: error.message };
-        }
-
+        const errorMessage = describeError(error, toolName, this.apiKey);
+        const errorCode = error instanceof McpError ? error.code : ErrorCode.InternalError;
         return {
             content: [{ type: 'text', text: errorMessage }],
             isError: true,
-            error: { code: errorCode, message: errorMessage }, // Include structured error
-            // data: mcpErrorData // SDK doesn't seem to directly support 'data' in the error response structure easily
+            error: { code: errorCode, message: errorMessage },
         };
     }
 
