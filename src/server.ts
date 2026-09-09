@@ -1,5 +1,7 @@
 import { SteamHttpClient, type HttpOptions } from './http.js';
-import { Catalog, catalogInputSchema } from './catalog.js';
+import { Catalog } from './catalog.js';
+import { toolDefinitions } from './tools.js';
+import { parseToolArgs, toolSchemas, type ToolArgs } from './schemas.js';
 import { describeError, logError } from './errors.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -12,112 +14,9 @@ import {
 import axios, { type AxiosInstance } from 'axios';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 
-// --- Argument Types and Validation ---
-
-// getCurrentPlayers
-interface GetCurrentPlayersArgs {
-    appid: number;
-}
-
-// Type guard to check if the arguments match the expected structure
-const isValidGetCurrentPlayersArgs = (
-    args: any
-): args is GetCurrentPlayersArgs =>
-    typeof args === 'object' &&
-    args !== null &&
-    typeof args.appid === 'number';
-
 interface GetCurrentPlayersApiResponse {
-    response: {
-        player_count: number;
-        result: number; // 1 for success
-    };
+    response: { player_count: number; result: number };
 }
-
-// getGameSchema
-interface GetGameSchemaArgs {
-    appid: number;
-}
-const isValidGetGameSchemaArgs = (args: any): args is GetGameSchemaArgs =>
-    typeof args === 'object' && args !== null && typeof args.appid === 'number';
-
-// getAppList (no args)
-
-// getAppDetails
-interface GetAppDetailsArgs {
-    appids: number[];
-    country?: string; // Optional country code
-}
-const isValidGetAppDetailsArgs = (args: any): args is GetAppDetailsArgs =>
-    typeof args === 'object' &&
-    args !== null &&
-    Array.isArray(args.appids) &&
-    args.appids.length <= 20 &&
-    args.appids.every((id: any) => typeof id === 'number') &&
-    (args.country === undefined || typeof args.country === 'string');
-
-// getGameNews
-interface GetGameNewsArgs {
-    appid: number;
-    count?: number; // Optional
-    maxlength?: number; // Optional
-}
-const isValidGetGameNewsArgs = (args: any): args is GetGameNewsArgs =>
-    typeof args === 'object' &&
-    args !== null &&
-    typeof args.appid === 'number' &&
-    (args.count === undefined || typeof args.count === 'number') &&
-    (args.maxlength === undefined || typeof args.maxlength === 'number');
-
-// getPlayerAchievements
-interface GetPlayerAchievementsArgs {
-    steamid: string;
-    appid: number;
-}
-const isValidGetPlayerAchievementsArgs = (args: any): args is GetPlayerAchievementsArgs =>
-    typeof args === 'object' &&
-    args !== null &&
-    typeof args.steamid === 'string' &&
-    typeof args.appid === 'number';
-
-// getUserStatsForGame
-interface GetUserStatsForGameArgs {
-    steamid: string;
-    appid: number;
-}
-const isValidGetUserStatsForGameArgs = (args: any): args is GetUserStatsForGameArgs =>
-    typeof args === 'object' &&
-    args !== null &&
-    typeof args.steamid === 'string' &&
-    typeof args.appid === 'number';
-
-// getGlobalStatsForGame
-interface GetGlobalStatsForGameArgs {
-    appid: number;
-    stat_names: string[]; // Changed from 'count' in API to 'stat_names' for clarity
-    start_date?: number; // Optional timestamp
-    end_date?: number; // Optional timestamp
-}
-const isValidGetGlobalStatsForGameArgs = (args: any): args is GetGlobalStatsForGameArgs =>
-    typeof args === 'object' &&
-    args !== null &&
-    typeof args.appid === 'number' &&
-    Array.isArray(args.stat_names) &&
-    args.stat_names.every((name: any) => typeof name === 'string') &&
-    (args.start_date === undefined || typeof args.start_date === 'number') &&
-    (args.end_date === undefined || typeof args.end_date === 'number');
-
-// getSupportedApiList (no args)
-
-// getGlobalAchievementPercentages
-interface GetGlobalAchievementPercentagesArgs {
-    appid: number; // Steam API uses 'gameid', but we use 'appid' for consistency
-}
-const isValidGetGlobalAchievementPercentagesArgs = (args: any): args is GetGlobalAchievementPercentagesArgs =>
-    typeof args === 'object' &&
-    args !== null &&
-    typeof args.appid === 'number';
-
 
 // --- Utility Types ---
 // Generic type for the content part of a successful MCP tool response
@@ -181,455 +80,6 @@ export class SteamMcpServer {
     private setupToolHandlers() {
         // Handler for listing available tools
         this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-            const toolDefinitions = [
-                // Existing: getCurrentPlayers
-                {
-                    name: 'getCurrentPlayers',
-                    description: 'Retrieves the current number of players for a given Steam application ID (AppID).',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            appid: {
-                                title: 'Appid',
-                                type: 'integer',
-                                description: 'The Steam Application ID of the game.',
-                            },
-                        },
-                        required: ['appid'],
-                    },
-                    // Based on ISteamUserStats/GetNumberOfCurrentPlayers/v1
-                    outputSchema: {
-                        type: 'object', properties: { response: { type: 'object', properties: { player_count: { title: 'Player Count', type: 'integer' }, result: { title: 'Result Code', type: 'integer' } }, required: ['player_count', 'result'] } }, required: ['response']
-                    }
-                },
-                // New: getAppList
-                {
-                    name: 'getAppList',
-                    description: 'Lists one bounded page of Steam store apps. Use next_cursor to continue; filter by app type or modification time.',
-                    inputSchema: catalogInputSchema,
-                    // Based on IStoreService/GetAppList/v1
-                    outputSchema: {
-                        type: 'object',
-                        properties: {
-                            applist: { type: 'object', properties: { apps: { type: 'array', items: {
-                                type: 'object', properties: { appid: { type: 'integer' }, name: { type: 'string' } }, required: ['appid', 'name'],
-                            } } }, required: ['apps'] },
-                            has_more: { type: 'boolean' },
-                            next_cursor: { type: 'integer' },
-                        }, required: ['applist', 'has_more'],
-                    }
-                },
-                // New: getGameSchema
-                {
-                    name: 'getGameSchema',
-                    description: 'Retrieves the game schema (stats and achievements definitions) for a given AppID.',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            appid: {
-                                title: 'Appid',
-                                type: 'integer',
-                                description: 'The Steam Application ID of the game.',
-                            },
-                        },
-                        required: ['appid'],
-                    },
-                    // Based on ISteamUserStats/GetSchemaForGame/v2
-                    outputSchema: {
-                        type: 'object',
-                        properties: {
-                            game: {
-                                type: 'object',
-                                properties: {
-                                    gameName: { type: 'string' },
-                                    gameVersion: { type: 'string' },
-                                    availableGameStats: {
-                                        type: 'object',
-                                        properties: {
-                                            stats: {
-                                                type: 'array',
-                                                items: {
-                                                    type: 'object',
-                                                    properties: {
-                                                        name: { type: 'string' },
-                                                        defaultvalue: { type: 'number' },
-                                                        displayName: { type: 'string' }
-                                                    }
-                                                }
-                                            },
-                                            achievements: {
-                                                type: 'array',
-                                                items: {
-                                                    type: 'object',
-                                                    properties: {
-                                                        name: { type: 'string' },
-                                                        defaultvalue: { type: 'integer' },
-                                                        displayName: { type: 'string' },
-                                                        hidden: { type: 'integer' }, // 0 or 1
-                                                        description: { type: 'string' },
-                                                        icon: { type: 'string', format: 'uri' },
-                                                        icongray: { type: 'string', format: 'uri' }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                },
-                                required: ['gameName', 'gameVersion', 'availableGameStats'] // Added required for clarity
-                            }
-                        },
-                        required: ['game']
-                    }
-                }, // Keep comma here
-                // New: getAppDetails
-                {
-                    name: 'getAppDetails',
-                    description: 'Retrieves store page details for one or more Steam AppIDs.',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            appids: {
-                                title: 'Appids',
-                                type: 'array',
-                                items: { type: 'integer' },
-                                maxItems: 20,
-                                description: 'Up to 20 Steam Application IDs; duplicates are fetched once.',
-                            },
-                            country: {
-                                title: 'Country Code',
-                                type: 'string',
-                                description: "ISO 3166 country code for regional pricing/filtering (e.g., 'US', 'GB'). Optional.",
-                            },
-                        },
-                        required: ['appids'],
-                    },
-                    // Based on appdetails endpoint (structure varies per appid)
-                    outputSchema: {
-                        type: 'object',
-                        description: 'A dictionary where keys are AppIDs (as strings) and values are app detail objects or error indicators.',
-                        additionalProperties: {
-                            type: 'object',
-                            properties: {
-                                success: { type: 'boolean' },
-                                data: { type: 'object' }, // Define more specific structure if needed, but it varies
-                                error: { type: 'string', description: 'Error message if success is false for this appid.' }
-                            }
-                        }
-                    }
-                }, // End of getAppDetails definition
-                // New: getGameNews
-                {
-                    name: 'getGameNews',
-                    description: 'Retrieves the latest news items for a given AppID.',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            appid: {
-                                title: 'Appid',
-                                type: 'integer',
-                                description: 'The Steam Application ID of the game.',
-                            },
-                            count: {
-                                title: 'Count',
-                                type: 'integer',
-                                description: 'Number of news items to retrieve.',
-                                default: 10, // Default value from spec
-                            },
-                            maxlength: {
-                                title: 'Max Length',
-                                type: 'integer',
-                                description: "Maximum length of the 'contents' field for each news item. 0 for full content.",
-                                default: 300, // Default value from spec
-                            },
-                        },
-                        required: ['appid'],
-                    },
-                    // Based on ISteamNews/GetNewsForApp/v2
-                    outputSchema: {
-                        type: 'object',
-                        properties: {
-                            appnews: {
-                                type: 'object',
-                                properties: {
-                                    appid: { type: 'integer' },
-                                    newsitems: {
-                                        type: 'array',
-                                        items: {
-                                            type: 'object',
-                                            properties: {
-                                                gid: { type: 'string' },
-                                                title: { type: 'string' },
-                                                url: { type: 'string', format: 'uri' },
-                                                is_external_url: { type: 'boolean' },
-                                                author: { type: 'string' },
-                                                contents: { type: 'string' },
-                                                feedlabel: { type: 'string' },
-                                                date: { type: 'integer' },
-                                                feedname: { type: 'string' }
-                                            }
-                                        }
-                                    },
-                                    count: { type: 'integer' }
-                                }
-                            }
-                        },
-                        required: ['appnews']
-                    }
-                }, // End of getGameNews definition
-                // New: getPlayerAchievements
-                {
-                    name: 'getPlayerAchievements',
-                    description: "Retrieves a player's achievement status for a specific game.",
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            steamid: {
-                                title: 'Steamid',
-                                type: 'string',
-                                description: "The player's 64-bit Steam ID.",
-                            },
-                            appid: {
-                                title: 'Appid',
-                                type: 'integer',
-                                description: 'The Steam Application ID of the game.',
-                            },
-                        },
-                        required: ['steamid', 'appid'],
-                    },
-                    // Based on ISteamUserStats/GetPlayerAchievements/v1
-                    outputSchema: {
-                        type: 'object',
-                        properties: {
-                            playerstats: {
-                                type: 'object',
-                                properties: {
-                                    steamID: { type: 'string' },
-                                    gameName: { type: 'string' },
-                                    achievements: {
-                                        type: 'array',
-                                        items: {
-                                            type: 'object',
-                                            properties: {
-                                                apiname: { type: 'string' },
-                                                achieved: { type: 'integer' },
-                                                unlocktime: { type: 'integer' }
-                                            }
-                                        }
-                                    },
-                                    success: { type: 'boolean' },
-                                    error: { type: 'string', description: 'Error message if success is false.' }
-                                }
-                            }
-                        },
-                        required: ['playerstats']
-                    }
-                }, // End of getPlayerAchievements definition
-                // New: getUserStatsForGame
-                {
-                    name: 'getUserStatsForGame',
-                    description: "Retrieves detailed statistics for a user in a specific game.",
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            steamid: {
-                                title: 'Steamid',
-                                type: 'string',
-                                description: "The player's 64-bit Steam ID.",
-                            },
-                            appid: {
-                                title: 'Appid',
-                                type: 'integer',
-                                description: 'The Steam Application ID of the game.',
-                            },
-                        },
-                        required: ['steamid', 'appid'],
-                    },
-                    // Based on ISteamUserStats/GetUserStatsForGame/v1 (or v2?) - Using v1 based on spec
-                    outputSchema: {
-                        type: 'object',
-                        properties: {
-                            playerstats: {
-                                type: 'object',
-                                properties: {
-                                    steamID: { type: 'string' },
-                                    gameName: { type: 'string' },
-                                    stats: {
-                                        type: 'array',
-                                        items: {
-                                            type: 'object',
-                                            properties: {
-                                                name: { type: 'string' },
-                                                value: { type: 'number' } // Steam API might return as integer or float
-                                            },
-                                            required: ['name', 'value']
-                                        }
-                                    },
-                                    achievements: { // Often included here too
-                                        type: 'array',
-                                        items: {
-                                            type: 'object',
-                                            properties: {
-                                                name: { type: 'string' },
-                                                achieved: { type: 'integer' }
-                                            },
-                                             required: ['name', 'achieved']
-                                        }
-                                    },
-                                    success: { type: 'boolean' }, // Note: This API doesn't seem to have a top-level success/error like GetPlayerAchievements
-                                    // error: { type: 'string' } // No explicit error field in successful response structure
-                                },
-                                required: ['steamID', 'gameName'] // Stats/Achievements might be empty
-                            }
-                        },
-                        required: ['playerstats']
-                    }
-                }, // End of getUserStatsForGame definition
-                // New: getGlobalStatsForGame
-                {
-                    name: 'getGlobalStatsForGame',
-                    description: 'Retrieves aggregated global stats for a specific game.',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            appid: {
-                                title: 'Appid',
-                                type: 'integer',
-                                description: 'The Steam Application ID of the game.',
-                            },
-                            stat_names: {
-                                title: 'Stat Names',
-                                type: 'array',
-                                items: { type: 'string' },
-                                description: 'List of specific global stat API names to retrieve.',
-                            },
-                            start_date: {
-                                title: 'Start Date',
-                                type: 'integer',
-                                
-                                description: 'Optional Unix timestamp for the start date.',
-                            },
-                            end_date: {
-                                title: 'End Date',
-                                type: 'integer',
-                                
-                                description: 'Optional Unix timestamp for the end date.',
-                            },
-                        },
-                        required: ['appid', 'stat_names'],
-                    },
-                    // Based on ISteamUserStats/GetGlobalStatsForGame/v1
-                    outputSchema: {
-                        type: 'object',
-                        properties: {
-                            response: {
-                                type: 'object',
-                                properties: {
-                                    result: { type: 'integer', description: 'Steam API result code (1 for success).' },
-                                    globalstats: {
-                                        type: 'object',
-                                        description: 'Object where keys are stat names, values are {total: string}.',
-                                        additionalProperties: {
-                                            type: 'object',
-                                            properties: { total: { type: 'string' } }, // Value is often a large number string
-                                            required: ['total']
-                                        }
-                                    },
-                                    error: { type: 'string', description: 'Error message if result code indicates failure.' }
-                                },
-                                required: ['result'] // globalstats might be absent
-                            }
-                        },
-                        required: ['response']
-                    }
-                }, // End of getGlobalStatsForGame definition
-                // New: getSupportedApiList
-                {
-                    name: 'getSupportedApiList',
-                    description: 'Retrieves the complete list of supported Steam Web API interfaces and methods.',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {},
-                        description: 'No arguments required.',
-                    },
-                    // Based on ISteamWebAPIUtil/GetSupportedAPIList/v1
-                    outputSchema: {
-                        type: 'object',
-                        properties: {
-                            apilist: {
-                                type: 'object',
-                                properties: {
-                                    interfaces: {
-                                        type: 'array',
-                                        items: {
-                                            type: 'object',
-                                            properties: {
-                                                name: { type: 'string' },
-                                                methods: {
-                                                    type: 'array',
-                                                    items: {
-                                                        type: 'object',
-                                                        properties: {
-                                                            name: { type: 'string' },
-                                                            version: { type: 'integer' },
-                                                            httpmethod: { type: 'string' },
-                                                            parameters: { type: 'array', items: { type: 'object' } } // Simplified parameters schema
-                                                        },
-                                                        required: ['name', 'version', 'httpmethod', 'parameters']
-                                                    }
-                                                }
-                                            },
-                                            required: ['name', 'methods']
-                                        }
-                                    }
-                                },
-                                required: ['interfaces']
-                            }
-                        },
-                        required: ['apilist']
-                    }
-                }, // End of getSupportedApiList definition
-                // New: getGlobalAchievementPercentages
-                {
-                    name: 'getGlobalAchievementPercentages',
-                    description: 'Retrieves the global achievement completion percentages for a specific game.',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            appid: {
-                                title: 'Appid',
-                                type: 'integer',
-                                description: 'The Steam Application ID of the game.',
-                            },
-                        },
-                        required: ['appid'],
-                    },
-                    // Based on ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2
-                    outputSchema: {
-                        type: 'object',
-                        properties: {
-                            achievementpercentages: {
-                                type: 'object',
-                                properties: {
-                                    achievements: {
-                                        type: 'array',
-                                        items: {
-                                            type: 'object',
-                                            properties: {
-                                                name: { type: 'string' }, // API name
-                                                percent: { type: 'number' } // Percentage
-                                            },
-                                            required: ['name', 'percent']
-                                        }
-                                    }
-                                },
-                                required: ['achievements']
-                            }
-                        },
-                        required: ['achievementpercentages']
-                    }
-                }
-                // Final tool added
-            ];
             return { tools: toolDefinitions };
         });
 
@@ -638,6 +88,9 @@ export class SteamMcpServer {
         this.server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<McpToolResponse> => {
             const toolName = request.params.name;
             const args = request.params.arguments;
+            if (!Object.hasOwn(toolSchemas, toolName)) {
+                throw new McpError(ErrorCode.InvalidParams, 'Unknown tool. Use tools/list to discover available tools.');
+            }
             const deadline = new AbortController();
             const timer = setTimeout(() => deadline.abort(new DOMException('Tool deadline exceeded', 'TimeoutError')), 15_000);
             const signal = AbortSignal.any([extra.signal, deadline.signal]);
@@ -645,25 +98,25 @@ export class SteamMcpServer {
             try {
                 switch (toolName) {
                     case 'getCurrentPlayers':
-                        return await this.handleGetCurrentPlayers(args, signal);
+                        return await this.handleGetCurrentPlayers(parseToolArgs('getCurrentPlayers', args), signal);
                     case 'getAppList':
-                        return await this.handleGetAppList(args, signal); // No args expected, but pass for consistency
+                        return await this.handleGetAppList(args, signal);
                     case 'getGameSchema':
-                        return await this.handleGetGameSchema(args, signal);
+                        return await this.handleGetGameSchema(parseToolArgs('getGameSchema', args), signal);
                     case 'getAppDetails':
-                        return await this.handleGetAppDetails(args, signal);
+                        return await this.handleGetAppDetails(parseToolArgs('getAppDetails', args), signal);
                     case 'getGameNews':
-                        return await this.handleGetGameNews(args, signal);
+                        return await this.handleGetGameNews(parseToolArgs('getGameNews', args), signal);
                     case 'getPlayerAchievements':
-                        return await this.handleGetPlayerAchievements(args, signal);
+                        return await this.handleGetPlayerAchievements(parseToolArgs('getPlayerAchievements', args), signal);
                     case 'getUserStatsForGame':
-                        return await this.handleGetUserStatsForGame(args, signal);
+                        return await this.handleGetUserStatsForGame(parseToolArgs('getUserStatsForGame', args), signal);
                     case 'getGlobalStatsForGame':
-                        return await this.handleGetGlobalStatsForGame(args, signal);
+                        return await this.handleGetGlobalStatsForGame(parseToolArgs('getGlobalStatsForGame', args), signal);
                     case 'getSupportedApiList':
-                        return await this.handleGetSupportedApiList(args, signal); // Pass args for consistency, though unused
+                        return await this.handleGetSupportedApiList(parseToolArgs('getSupportedApiList', args), signal); // Pass args for consistency, though unused
                     case 'getGlobalAchievementPercentages':
-                        return await this.handleGetGlobalAchievementPercentages(args, signal);
+                        return await this.handleGetGlobalAchievementPercentages(parseToolArgs('getGlobalAchievementPercentages', args), signal);
                     // --- Add cases for other tools here ---
                     default:
                         // Use MethodNotFound for unknown tools
@@ -672,17 +125,14 @@ export class SteamMcpServer {
             } catch (error) {
                 // Centralized error handling
                 logError(toolName, error, this.apiKey);
-                return this.formatErrorResponse(error, toolName, args);
+                return this.formatErrorResponse(error, toolName);
             } finally { clearTimeout(timer); }
         });
     }
 
     // --- Tool Handler Implementations ---
 
-    private async handleGetCurrentPlayers(args: any, signal: AbortSignal): Promise<McpToolResponse> {
-        if (!isValidGetCurrentPlayersArgs(args)) {
-            throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for getCurrentPlayers. Requires an integer "appid".');
-        }
+    private async handleGetCurrentPlayers(args: ToolArgs<'getCurrentPlayers'>, signal: AbortSignal): Promise<McpToolResponse> {
         const appId = args.appid;
         const response = await this.axiosInstance.get<GetCurrentPlayersApiResponse>(
             '/ISteamUserStats/GetNumberOfCurrentPlayers/v1/',
@@ -699,14 +149,11 @@ export class SteamMcpServer {
         return this.formatSuccessResponse(response.data);
     }
 
-    private async handleGetAppList(args: any, signal: AbortSignal): Promise<McpToolResponse> {
+    private async handleGetAppList(args: unknown, signal: AbortSignal): Promise<McpToolResponse> {
         return this.formatSuccessResponse(await this.catalog.list(args, signal));
     }
 
-    private async handleGetGameSchema(args: any, signal: AbortSignal): Promise<McpToolResponse> {
-        if (!isValidGetGameSchemaArgs(args)) {
-            throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for getGameSchema. Requires an integer "appid".');
-        }
+    private async handleGetGameSchema(args: ToolArgs<'getGameSchema'>, signal: AbortSignal): Promise<McpToolResponse> {
         const appId = args.appid;
         const response = await this.axiosInstance.get<any>( // Use 'any' for now
             '/ISteamUserStats/GetSchemaForGame/v2/',
@@ -722,10 +169,7 @@ export class SteamMcpServer {
         return this.formatSuccessResponse(response.data);
     }
 
-    private async handleGetAppDetails(args: any, signal: AbortSignal): Promise<McpToolResponse> {
-        if (!isValidGetAppDetailsArgs(args)) {
-            throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for getAppDetails. Requires an array of at most 20 integers "appids" and optionally a string "country".');
-        }
+    private async handleGetAppDetails(args: ToolArgs<'getAppDetails'>, signal: AbortSignal): Promise<McpToolResponse> {
 
         const appIds = [...new Set(args.appids)];
         const countryCode = args.country;
@@ -776,205 +220,190 @@ export class SteamMcpServer {
         return this.formatSuccessResponse(combinedResults);
     }
 
-private async handleGetGameNews(args: any, signal: AbortSignal): Promise<McpToolResponse> {
-    if (!isValidGetGameNewsArgs(args)) {
-        throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for getGameNews. Requires an integer "appid" and optionally integers "count" and "maxlength".');
-    }
+    private async handleGetGameNews(args: ToolArgs<'getGameNews'>, signal: AbortSignal): Promise<McpToolResponse> {
 
-    const appId = args.appid;
-    const count = args.count ?? 10; // Use default if not provided
-    const maxLength = args.maxlength ?? 300; // Use default if not provided
+        const appId = args.appid;
+        const count = args.count ?? 10; // Use default if not provided
+        const maxLength = args.maxlength ?? 300; // Use default if not provided
 
-    const response = await this.axiosInstance.get<any>( // Define interface if needed
-        '/ISteamNews/GetNewsForApp/v2/',
-        {
-            signal,
-            params: {
-                appid: appId,
-                count: count,
-                maxlength: maxLength,
-            } // API key added automatically
+        const response = await this.axiosInstance.get<any>( // Define interface if needed
+            '/ISteamNews/GetNewsForApp/v2/',
+            {
+                signal,
+                params: {
+                    appid: appId,
+                    count: count,
+                    maxlength: maxLength,
+                } // API key added automatically
+            }
+        );
+
+        // Check if appnews data exists, indicating success for this endpoint
+        if (!response.data?.appnews) {
+             throw new McpError(
+                ErrorCode.InternalError, // Or NotFound?
+                `Steam API did not return news data for appid ${appId}. It might be invalid or have no news.`
+            );
         }
-    );
 
-    // Check if appnews data exists, indicating success for this endpoint
-    if (!response.data?.appnews) {
-         throw new McpError(
-            ErrorCode.InternalError, // Or NotFound?
-            `Steam API did not return news data for appid ${appId}. It might be invalid or have no news.`
+        return this.formatSuccessResponse(response.data);
+    }
+
+    private async handleGetPlayerAchievements(args: ToolArgs<'getPlayerAchievements'>, signal: AbortSignal): Promise<McpToolResponse> {
+
+        const steamId = args.steamid;
+        const appId = args.appid;
+
+        const response = await this.axiosInstance.get<any>( // Define interface if needed
+            '/ISteamUserStats/GetPlayerAchievements/v1/',
+            {
+                signal,
+                params: {
+                    steamid: steamId,
+                    appid: appId,
+                    // 'l': 'english' // Optional: language, consider adding later if needed
+                } // API key added automatically
+            }
         );
-    }
 
-    return this.formatSuccessResponse(response.data);
-}
-
-private async handleGetPlayerAchievements(args: any, signal: AbortSignal): Promise<McpToolResponse> {
-    if (!isValidGetPlayerAchievementsArgs(args)) {
-        throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for getPlayerAchievements. Requires a string "steamid" and an integer "appid".');
-    }
-
-    const steamId = args.steamid;
-    const appId = args.appid;
-
-    const response = await this.axiosInstance.get<any>( // Define interface if needed
-        '/ISteamUserStats/GetPlayerAchievements/v1/',
-        {
-            signal,
-            params: {
-                steamid: steamId,
-                appid: appId,
-                // 'l': 'english' // Optional: language, consider adding later if needed
-            } // API key added automatically
+        // Check the success flag within the playerstats object
+        if (!response.data?.playerstats?.success) {
+            const errorMsg = response.data?.playerstats?.error ?? `Steam API reported failure for getPlayerAchievements (appid: ${appId}, steamid: ${steamId}).`;
+             throw new McpError(
+                ErrorCode.InternalError, // Could potentially map 'Profile is private' to a different code if desired
+                errorMsg
+            );
         }
-    );
 
-    // Check the success flag within the playerstats object
-    if (!response.data?.playerstats?.success) {
-        const errorMsg = response.data?.playerstats?.error ?? `Steam API reported failure for getPlayerAchievements (appid: ${appId}, steamid: ${steamId}).`;
-         throw new McpError(
-            ErrorCode.InternalError, // Could potentially map 'Profile is private' to a different code if desired
-            errorMsg
+        return this.formatSuccessResponse(response.data);
+    }
+
+    private async handleGetUserStatsForGame(args: ToolArgs<'getUserStatsForGame'>, signal: AbortSignal): Promise<McpToolResponse> {
+
+        const steamId = args.steamid;
+        const appId = args.appid;
+
+        // Note: Spec mentions v1, but v2 is generally preferred if available. Sticking to v1 based on spec.
+        const response = await this.axiosInstance.get<any>(
+            '/ISteamUserStats/GetUserStatsForGame/v1/', // Using v1 as per spec
+            {
+                signal,
+                params: {
+                    steamid: steamId,
+                    appid: appId,
+                } // API key added automatically
+            }
         );
-    }
 
-    return this.formatSuccessResponse(response.data);
-}
-
-private async handleGetUserStatsForGame(args: any, signal: AbortSignal): Promise<McpToolResponse> {
-    if (!isValidGetUserStatsForGameArgs(args)) {
-        throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for getUserStatsForGame. Requires a string "steamid" and an integer "appid".');
-    }
-
-    const steamId = args.steamid;
-    const appId = args.appid;
-
-    // Note: Spec mentions v1, but v2 is generally preferred if available. Sticking to v1 based on spec.
-    const response = await this.axiosInstance.get<any>(
-        '/ISteamUserStats/GetUserStatsForGame/v1/', // Using v1 as per spec
-        {
-            signal,
-            params: {
-                steamid: steamId,
-                appid: appId,
-            } // API key added automatically
+        // This endpoint throws an HTTP error (like 500) for private profiles or invalid IDs,
+        // rather than returning a JSON body with success:false.
+        // The central Axios error handler should catch these.
+        // We just need to ensure the expected structure exists on success.
+        if (!response.data?.playerstats) {
+             throw new McpError(
+                ErrorCode.InternalError,
+                `Steam API did not return the expected 'playerstats' structure for getUserStatsForGame (appid: ${appId}, steamid: ${steamId}).`
+            );
         }
-    );
 
-    // This endpoint throws an HTTP error (like 500) for private profiles or invalid IDs,
-    // rather than returning a JSON body with success:false.
-    // The central Axios error handler should catch these.
-    // We just need to ensure the expected structure exists on success.
-    if (!response.data?.playerstats) {
-         throw new McpError(
-            ErrorCode.InternalError,
-            `Steam API did not return the expected 'playerstats' structure for getUserStatsForGame (appid: ${appId}, steamid: ${steamId}).`
-        );
+        // Unlike GetPlayerAchievements, this endpoint doesn't seem to have a 'success' boolean inside playerstats.
+        // Assume success if the request didn't throw an error and playerstats exists.
+
+        return this.formatSuccessResponse(response.data);
     }
 
-    // Unlike GetPlayerAchievements, this endpoint doesn't seem to have a 'success' boolean inside playerstats.
-    // Assume success if the request didn't throw an error and playerstats exists.
+    private async handleGetGlobalStatsForGame(args: ToolArgs<'getGlobalStatsForGame'>, signal: AbortSignal): Promise<McpToolResponse> {
 
-    return this.formatSuccessResponse(response.data);
-}
+        const appId = args.appid;
+        const statNames = args.stat_names;
+        const startDate = args.start_date;
+        const endDate = args.end_date;
 
-private async handleGetGlobalStatsForGame(args: any, signal: AbortSignal): Promise<McpToolResponse> {
-    if (!isValidGetGlobalStatsForGameArgs(args)) {
-        throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for getGlobalStatsForGame. Requires integer "appid", array of strings "stat_names", and optionally timestamps "start_date", "end_date".');
-    }
+        // The Steam API expects stat names prefixed with 'count=' and indexed.
+        const params: Record<string, any> = {
+            appid: appId,
+            count: statNames.length, // Number of stats being requested
+        };
+        statNames.forEach((name, index) => {
+            params[`name[${index}]`] = name;
+        });
 
-    const appId = args.appid;
-    const statNames = args.stat_names;
-    const startDate = args.start_date;
-    const endDate = args.end_date;
-
-    // The Steam API expects stat names prefixed with 'count=' and indexed.
-    const params: Record<string, any> = {
-        appid: appId,
-        count: statNames.length, // Number of stats being requested
-    };
-    statNames.forEach((name, index) => {
-        params[`name[${index}]`] = name;
-    });
-
-    if (startDate !== undefined) {
-        params['startdate'] = startDate;
-    }
-    if (endDate !== undefined) {
-        params['enddate'] = endDate;
-    }
-
-    const response = await this.axiosInstance.get<any>(
-        '/ISteamUserStats/GetGlobalStatsForGame/v1/',
-        { params, signal } // API key added automatically
-    );
-
-    // Check the result code in the response
-    if (response.data?.response?.result !== 1) {
-        const errorMsg = response.data?.response?.error ?? `Steam API reported failure for getGlobalStatsForGame (appid: ${appId}). Result code: ${response.data?.response?.result ?? 'unknown'}`;
-         throw new McpError(
-            ErrorCode.InternalError, // Or map specific result codes if known
-            errorMsg
-        );
-    }
-     // Also check if the response structure is as expected even on success code 1
-    if (!response.data?.response) {
-         throw new McpError(
-            ErrorCode.InternalError,
-            `Steam API returned success code but missing 'response' object for getGlobalStatsForGame (appid: ${appId}).`
-        );
-    }
-
-
-    return this.formatSuccessResponse(response.data);
-}
-
-private async handleGetSupportedApiList(args: any, signal: AbortSignal): Promise<McpToolResponse> {
-    // No arguments to validate for this tool
-
-    const response = await this.axiosInstance.get<any>(
-        '/ISteamWebAPIUtil/GetSupportedAPIList/v1/', { signal }
-        // API key might be optional for this endpoint, but axiosInstance adds it anyway
-    );
-
-    // Check if the expected structure exists
-    if (!response.data?.apilist?.interfaces) {
-         throw new McpError(
-            ErrorCode.InternalError,
-            `Steam API did not return the expected 'apilist.interfaces' structure for getSupportedApiList.`
-        );
-    }
-
-    return this.formatSuccessResponse(response.data);
-}
-
-private async handleGetGlobalAchievementPercentages(args: any, signal: AbortSignal): Promise<McpToolResponse> {
-    if (!isValidGetGlobalAchievementPercentagesArgs(args)) {
-        throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for getGlobalAchievementPercentages. Requires an integer "appid".');
-    }
-
-    const appId = args.appid;
-
-    // Note: Steam API uses 'gameid' parameter here, not 'appid'
-    const response = await this.axiosInstance.get<any>(
-        '/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/',
-        {
-            signal,
-            params: {
-                gameid: appId // Use gameid as required by the API
-            } // API key added automatically
+        if (startDate !== undefined) {
+            params['startdate'] = startDate;
         }
-    );
+        if (endDate !== undefined) {
+            params['enddate'] = endDate;
+        }
 
-    // Check if the expected structure exists
-    if (!response.data?.achievementpercentages?.achievements) {
-         throw new McpError(
-            ErrorCode.InternalError,
-            `Steam API did not return the expected 'achievementpercentages.achievements' structure for getGlobalAchievementPercentages (appid: ${appId}).`
+        const response = await this.axiosInstance.get<any>(
+            '/ISteamUserStats/GetGlobalStatsForGame/v1/',
+            { params, signal } // API key added automatically
         );
+
+        // Check the result code in the response
+        if (response.data?.response?.result !== 1) {
+            const errorMsg = response.data?.response?.error ?? `Steam API reported failure for getGlobalStatsForGame (appid: ${appId}). Result code: ${response.data?.response?.result ?? 'unknown'}`;
+             throw new McpError(
+                ErrorCode.InternalError, // Or map specific result codes if known
+                errorMsg
+            );
+        }
+         // Also check if the response structure is as expected even on success code 1
+        if (!response.data?.response) {
+             throw new McpError(
+                ErrorCode.InternalError,
+                `Steam API returned success code but missing 'response' object for getGlobalStatsForGame (appid: ${appId}).`
+            );
+        }
+
+
+        return this.formatSuccessResponse(response.data);
     }
 
-    return this.formatSuccessResponse(response.data);
-}
+    private async handleGetSupportedApiList(args: ToolArgs<'getSupportedApiList'>, signal: AbortSignal): Promise<McpToolResponse> {
+        // No arguments to validate for this tool
+
+        const response = await this.axiosInstance.get<any>(
+            '/ISteamWebAPIUtil/GetSupportedAPIList/v1/', { signal }
+            // API key might be optional for this endpoint, but axiosInstance adds it anyway
+        );
+
+        // Check if the expected structure exists
+        if (!response.data?.apilist?.interfaces) {
+             throw new McpError(
+                ErrorCode.InternalError,
+                `Steam API did not return the expected 'apilist.interfaces' structure for getSupportedApiList.`
+            );
+        }
+
+        return this.formatSuccessResponse(response.data);
+    }
+
+    private async handleGetGlobalAchievementPercentages(args: ToolArgs<'getGlobalAchievementPercentages'>, signal: AbortSignal): Promise<McpToolResponse> {
+
+        const appId = args.appid;
+
+        // Note: Steam API uses 'gameid' parameter here, not 'appid'
+        const response = await this.axiosInstance.get<any>(
+            '/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/',
+            {
+                signal,
+                params: {
+                    gameid: appId // Use gameid as required by the API
+                } // API key added automatically
+            }
+        );
+
+        // Check if the expected structure exists
+        if (!response.data?.achievementpercentages?.achievements) {
+             throw new McpError(
+                ErrorCode.InternalError,
+                `Steam API did not return the expected 'achievementpercentages.achievements' structure for getGlobalAchievementPercentages (appid: ${appId}).`
+            );
+        }
+
+        return this.formatSuccessResponse(response.data);
+    }
 
 // --- Add handlers for other tools here ---
 
@@ -991,7 +420,7 @@ private async handleGetGlobalAchievementPercentages(args: any, signal: AbortSign
         };
     }
 
-    private formatErrorResponse(error: unknown, toolName: string, args: any): McpToolErrorResponse {
+    private formatErrorResponse(error: unknown, toolName: string): McpToolErrorResponse {
         const errorMessage = describeError(error, toolName, this.apiKey);
         const errorCode = error instanceof McpError ? error.code : ErrorCode.InternalError;
         return {

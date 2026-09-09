@@ -1,26 +1,7 @@
+import { parseToolArgs } from './schemas.js';
 import type { SteamHttpClient } from './http.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 
-export const catalogInputSchema = {
-    type: 'object' as const,
-    properties: {
-        limit: { type: 'integer', minimum: 1, maximum: 100, default: 20, description: 'Maximum apps to return in this page.' },
-        cursor: { type: 'integer', minimum: 0, maximum: 4294967295, description: 'Use next_cursor from the previous page.' },
-        if_modified_since: { type: 'integer', minimum: 0, description: 'Only apps modified since this Unix timestamp in seconds.' },
-        include_games: { type: 'boolean', default: true },
-        include_dlc: { type: 'boolean', default: false },
-        include_software: { type: 'boolean', default: false },
-        include_videos: { type: 'boolean', default: false },
-        include_hardware: { type: 'boolean', default: false },
-    },
-    additionalProperties: false,
-} as const;
-
-type CatalogArgs = {
-    limit?: number; cursor?: number; if_modified_since?: number;
-    include_games?: boolean; include_dlc?: boolean; include_software?: boolean;
-    include_videos?: boolean; include_hardware?: boolean;
-};
 type App = { appid: number; name: string; last_modified?: number; price_change_number?: number };
 type CatalogPage = { applist: { apps: App[] }; has_more: boolean; next_cursor?: number };
 
@@ -30,18 +11,7 @@ export class Catalog {
     constructor(private client: SteamHttpClient, private now = Date.now) {}
 
     async list(input: unknown, signal?: AbortSignal): Promise<CatalogPage> {
-        const args = input ?? {};
-        if (typeof args !== 'object' || Array.isArray(args)) {
-            throw new McpError(ErrorCode.InvalidParams, 'getAppList expects an object.');
-        }
-        for (const [name, value] of Object.entries(args)) {
-            const schema = catalogInputSchema.properties[name as keyof typeof catalogInputSchema.properties];
-            if (!schema || (schema.type === 'boolean' ? typeof value !== 'boolean'
-                : !Number.isSafeInteger(value) || value < schema.minimum || ('maximum' in schema && value > schema.maximum))) {
-                throw new McpError(ErrorCode.InvalidParams, `Invalid getAppList field '${name}'. Check the advertised limits and types.`);
-            }
-        }
-        const options = args as CatalogArgs;
+        const options = parseToolArgs('getAppList', input);
         const limit = options.limit ?? 20;
         const params = {
             max_results: limit, last_appid: options.cursor ?? 0,

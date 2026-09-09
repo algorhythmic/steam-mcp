@@ -36,7 +36,7 @@ test('catalog cache expires and separates filters', async () => {
     await catalog.list({});
     await catalog.list({ include_dlc: true });
     assert.equal(count, 3);
-    await assert.rejects(catalog.list({ limit: 101 }), /Invalid getAppList/);
+    await assert.rejects(catalog.list({ limit: 101 }), /Invalid arguments for getAppList/);
     assert.equal(count, 3);
 });
 
