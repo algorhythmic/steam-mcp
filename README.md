@@ -144,3 +144,7 @@ An AppID is the number following `/app/` in a Steam store URL. Player tools requ
 - If `STEAM_API_KEY` is missing, set it in the client configuration or the optional `.env` file and restart the server.
 - If Steam denies access, check the key and the target profile's game-details visibility. Some games do not expose stats or achievements.
 - A server waiting quietly in a terminal is normal: stdio expects an MCP client. Diagnostic messages go to stderr; stdout is reserved for protocol messages.
+
+## Request limits
+
+Store-detail batches accept at most 20 IDs and fetch duplicate IDs once. Each Steam host has a shared limit of four active requests. HTTP operations have a 10-second deadline including queueing and retries; each tool call has a 15-second overall deadline and follows client cancellation. Transient network errors, HTTP 429, and selected 5xx responses receive at most two retries, respecting `Retry-After`. Responses are limited to 2 MiB.

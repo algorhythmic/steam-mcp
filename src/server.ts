@@ -1,3 +1,4 @@
+import { SteamHttpClient, type HttpOptions } from './http.js';
 import { Catalog, catalogInputSchema } from './catalog.js';
 import { describeError, logError } from './errors.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -51,6 +52,7 @@ const isValidGetAppDetailsArgs = (args: any): args is GetAppDetailsArgs =>
     typeof args === 'object' &&
     args !== null &&
     Array.isArray(args.appids) &&
+    args.appids.length <= 20 &&
     args.appids.every((id: any) => typeof id === 'number') &&
     (args.country === undefined || typeof args.country === 'string');
 
@@ -140,11 +142,11 @@ type McpToolResponse = McpToolSuccessResponse | McpToolErrorResponse;
 
 export class SteamMcpServer {
     private server: Server;
-    private axiosInstance: AxiosInstance;
-    private storeInstance: AxiosInstance;
+    private axiosInstance: SteamHttpClient;
+    private storeInstance: SteamHttpClient;
     private catalog: Catalog;
 
-    constructor(private readonly apiKey: string, clients: { webApi?: AxiosInstance; store?: AxiosInstance } = {}) {
+    constructor(private readonly apiKey: string, clients: { webApi?: AxiosInstance; store?: AxiosInstance; http?: HttpOptions } = {}) {
         this.server = new Server(
             {
                 // Server metadata
@@ -161,13 +163,13 @@ export class SteamMcpServer {
         );
 
         // Create an axios instance for making requests to the Steam API
-        this.axiosInstance = clients.webApi ?? axios.create({
+        this.axiosInstance = new SteamHttpClient(clients.webApi ?? axios.create({
             baseURL: 'https://api.steampowered.com',
             params: {
                 key: apiKey // Add key as a default parameter
             }
-        });
-        this.storeInstance = clients.store ?? axios.create();
+        }), clients.http);
+        this.storeInstance = new SteamHttpClient(clients.store ?? axios.create(), clients.http);
         this.catalog = new Catalog(this.axiosInstance);
         this.setupToolHandlers();
 
@@ -290,7 +292,8 @@ export class SteamMcpServer {
                                 title: 'Appids',
                                 type: 'array',
                                 items: { type: 'integer' },
-                                description: 'A list of Steam Application IDs.',
+                                maxItems: 20,
+                                description: 'Up to 20 Steam Application IDs; duplicates are fetched once.',
                             },
                             country: {
                                 title: 'Country Code',
@@ -632,32 +635,35 @@ export class SteamMcpServer {
 
         // Handler for executing a tool call
         // Refactored handler for executing tool calls
-        this.server.setRequestHandler(CallToolRequestSchema, async (request): Promise<McpToolResponse> => {
+        this.server.setRequestHandler(CallToolRequestSchema, async (request, extra): Promise<McpToolResponse> => {
             const toolName = request.params.name;
             const args = request.params.arguments;
+            const deadline = new AbortController();
+            const timer = setTimeout(() => deadline.abort(new DOMException('Tool deadline exceeded', 'TimeoutError')), 15_000);
+            const signal = AbortSignal.any([extra.signal, deadline.signal]);
 
             try {
                 switch (toolName) {
                     case 'getCurrentPlayers':
-                        return await this.handleGetCurrentPlayers(args);
+                        return await this.handleGetCurrentPlayers(args, signal);
                     case 'getAppList':
-                        return await this.handleGetAppList(args); // No args expected, but pass for consistency
+                        return await this.handleGetAppList(args, signal); // No args expected, but pass for consistency
                     case 'getGameSchema':
-                        return await this.handleGetGameSchema(args);
+                        return await this.handleGetGameSchema(args, signal);
                     case 'getAppDetails':
-                        return await this.handleGetAppDetails(args);
+                        return await this.handleGetAppDetails(args, signal);
                     case 'getGameNews':
-                        return await this.handleGetGameNews(args);
+                        return await this.handleGetGameNews(args, signal);
                     case 'getPlayerAchievements':
-                        return await this.handleGetPlayerAchievements(args);
+                        return await this.handleGetPlayerAchievements(args, signal);
                     case 'getUserStatsForGame':
-                        return await this.handleGetUserStatsForGame(args);
+                        return await this.handleGetUserStatsForGame(args, signal);
                     case 'getGlobalStatsForGame':
-                        return await this.handleGetGlobalStatsForGame(args);
+                        return await this.handleGetGlobalStatsForGame(args, signal);
                     case 'getSupportedApiList':
-                        return await this.handleGetSupportedApiList(args); // Pass args for consistency, though unused
+                        return await this.handleGetSupportedApiList(args, signal); // Pass args for consistency, though unused
                     case 'getGlobalAchievementPercentages':
-                        return await this.handleGetGlobalAchievementPercentages(args);
+                        return await this.handleGetGlobalAchievementPercentages(args, signal);
                     // --- Add cases for other tools here ---
                     default:
                         // Use MethodNotFound for unknown tools
@@ -667,20 +673,20 @@ export class SteamMcpServer {
                 // Centralized error handling
                 logError(toolName, error, this.apiKey);
                 return this.formatErrorResponse(error, toolName, args);
-            }
+            } finally { clearTimeout(timer); }
         });
     }
 
     // --- Tool Handler Implementations ---
 
-    private async handleGetCurrentPlayers(args: any): Promise<McpToolResponse> {
+    private async handleGetCurrentPlayers(args: any, signal: AbortSignal): Promise<McpToolResponse> {
         if (!isValidGetCurrentPlayersArgs(args)) {
             throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for getCurrentPlayers. Requires an integer "appid".');
         }
         const appId = args.appid;
         const response = await this.axiosInstance.get<GetCurrentPlayersApiResponse>(
             '/ISteamUserStats/GetNumberOfCurrentPlayers/v1/',
-            { params: { appid: appId } } // API key is added automatically by axiosInstance defaults
+            { params: { appid: appId }, signal } // API key is added automatically by axiosInstance defaults
         );
 
         // Specific check for this endpoint's success indicator
@@ -693,18 +699,18 @@ export class SteamMcpServer {
         return this.formatSuccessResponse(response.data);
     }
 
-    private async handleGetAppList(args: any): Promise<McpToolResponse> {
-        return this.formatSuccessResponse(await this.catalog.list(args));
+    private async handleGetAppList(args: any, signal: AbortSignal): Promise<McpToolResponse> {
+        return this.formatSuccessResponse(await this.catalog.list(args, signal));
     }
 
-    private async handleGetGameSchema(args: any): Promise<McpToolResponse> {
+    private async handleGetGameSchema(args: any, signal: AbortSignal): Promise<McpToolResponse> {
         if (!isValidGetGameSchemaArgs(args)) {
             throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for getGameSchema. Requires an integer "appid".');
         }
         const appId = args.appid;
         const response = await this.axiosInstance.get<any>( // Use 'any' for now
             '/ISteamUserStats/GetSchemaForGame/v2/',
-            { params: { appid: appId } }
+            { params: { appid: appId }, signal }
         );
         // Check if game data exists, indicating success for this endpoint
         if (!response.data?.game) {
@@ -716,12 +722,12 @@ export class SteamMcpServer {
         return this.formatSuccessResponse(response.data);
     }
 
-    private async handleGetAppDetails(args: any): Promise<McpToolResponse> {
+    private async handleGetAppDetails(args: any, signal: AbortSignal): Promise<McpToolResponse> {
         if (!isValidGetAppDetailsArgs(args)) {
-            throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for getAppDetails. Requires an array of integers "appids" and optionally a string "country".');
+            throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for getAppDetails. Requires an array of at most 20 integers "appids" and optionally a string "country".');
         }
 
-        const appIds = args.appids;
+        const appIds = [...new Set(args.appids)];
         const countryCode = args.country;
         const appDetailsUrl = 'https://store.steampowered.com/api/appdetails'; // Different base URL
 
@@ -734,7 +740,7 @@ export class SteamMcpServer {
                         params.cc = countryCode;
                     }
                     // Make request *without* the default axiosInstance base URL and API key
-                    const response = await this.storeInstance.get(appDetailsUrl, { params });
+                    const response = await this.storeInstance.get(appDetailsUrl, { params, signal });
 
                     // The appdetails endpoint wraps the result with the appid as the key
                     const appData = response.data?.[appid.toString()];
@@ -770,7 +776,7 @@ export class SteamMcpServer {
         return this.formatSuccessResponse(combinedResults);
     }
 
-private async handleGetGameNews(args: any): Promise<McpToolResponse> {
+private async handleGetGameNews(args: any, signal: AbortSignal): Promise<McpToolResponse> {
     if (!isValidGetGameNewsArgs(args)) {
         throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for getGameNews. Requires an integer "appid" and optionally integers "count" and "maxlength".');
     }
@@ -782,6 +788,7 @@ private async handleGetGameNews(args: any): Promise<McpToolResponse> {
     const response = await this.axiosInstance.get<any>( // Define interface if needed
         '/ISteamNews/GetNewsForApp/v2/',
         {
+            signal,
             params: {
                 appid: appId,
                 count: count,
@@ -801,7 +808,7 @@ private async handleGetGameNews(args: any): Promise<McpToolResponse> {
     return this.formatSuccessResponse(response.data);
 }
 
-private async handleGetPlayerAchievements(args: any): Promise<McpToolResponse> {
+private async handleGetPlayerAchievements(args: any, signal: AbortSignal): Promise<McpToolResponse> {
     if (!isValidGetPlayerAchievementsArgs(args)) {
         throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for getPlayerAchievements. Requires a string "steamid" and an integer "appid".');
     }
@@ -812,6 +819,7 @@ private async handleGetPlayerAchievements(args: any): Promise<McpToolResponse> {
     const response = await this.axiosInstance.get<any>( // Define interface if needed
         '/ISteamUserStats/GetPlayerAchievements/v1/',
         {
+            signal,
             params: {
                 steamid: steamId,
                 appid: appId,
@@ -832,7 +840,7 @@ private async handleGetPlayerAchievements(args: any): Promise<McpToolResponse> {
     return this.formatSuccessResponse(response.data);
 }
 
-private async handleGetUserStatsForGame(args: any): Promise<McpToolResponse> {
+private async handleGetUserStatsForGame(args: any, signal: AbortSignal): Promise<McpToolResponse> {
     if (!isValidGetUserStatsForGameArgs(args)) {
         throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for getUserStatsForGame. Requires a string "steamid" and an integer "appid".');
     }
@@ -844,6 +852,7 @@ private async handleGetUserStatsForGame(args: any): Promise<McpToolResponse> {
     const response = await this.axiosInstance.get<any>(
         '/ISteamUserStats/GetUserStatsForGame/v1/', // Using v1 as per spec
         {
+            signal,
             params: {
                 steamid: steamId,
                 appid: appId,
@@ -868,7 +877,7 @@ private async handleGetUserStatsForGame(args: any): Promise<McpToolResponse> {
     return this.formatSuccessResponse(response.data);
 }
 
-private async handleGetGlobalStatsForGame(args: any): Promise<McpToolResponse> {
+private async handleGetGlobalStatsForGame(args: any, signal: AbortSignal): Promise<McpToolResponse> {
     if (!isValidGetGlobalStatsForGameArgs(args)) {
         throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for getGlobalStatsForGame. Requires integer "appid", array of strings "stat_names", and optionally timestamps "start_date", "end_date".');
     }
@@ -896,7 +905,7 @@ private async handleGetGlobalStatsForGame(args: any): Promise<McpToolResponse> {
 
     const response = await this.axiosInstance.get<any>(
         '/ISteamUserStats/GetGlobalStatsForGame/v1/',
-        { params } // API key added automatically
+        { params, signal } // API key added automatically
     );
 
     // Check the result code in the response
@@ -919,11 +928,11 @@ private async handleGetGlobalStatsForGame(args: any): Promise<McpToolResponse> {
     return this.formatSuccessResponse(response.data);
 }
 
-private async handleGetSupportedApiList(args: any): Promise<McpToolResponse> {
+private async handleGetSupportedApiList(args: any, signal: AbortSignal): Promise<McpToolResponse> {
     // No arguments to validate for this tool
 
     const response = await this.axiosInstance.get<any>(
-        '/ISteamWebAPIUtil/GetSupportedAPIList/v1/'
+        '/ISteamWebAPIUtil/GetSupportedAPIList/v1/', { signal }
         // API key might be optional for this endpoint, but axiosInstance adds it anyway
     );
 
@@ -938,7 +947,7 @@ private async handleGetSupportedApiList(args: any): Promise<McpToolResponse> {
     return this.formatSuccessResponse(response.data);
 }
 
-private async handleGetGlobalAchievementPercentages(args: any): Promise<McpToolResponse> {
+private async handleGetGlobalAchievementPercentages(args: any, signal: AbortSignal): Promise<McpToolResponse> {
     if (!isValidGetGlobalAchievementPercentagesArgs(args)) {
         throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for getGlobalAchievementPercentages. Requires an integer "appid".');
     }
@@ -949,6 +958,7 @@ private async handleGetGlobalAchievementPercentages(args: any): Promise<McpToolR
     const response = await this.axiosInstance.get<any>(
         '/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/',
         {
+            signal,
             params: {
                 gameid: appId // Use gameid as required by the API
             } // API key added automatically

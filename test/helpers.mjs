@@ -12,6 +12,7 @@ export async function createHarness(t, reply) {
     const server = new SteamMcpServer('test-api-key', {
         webApi: axios.create({ adapter, params: { key: 'test-api-key' } }),
         store: axios.create({ adapter }),
+        http: { backoffMs: 0 },
     });
     const client = new Client({ name: 'steam-mcp-tests', version: '1.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

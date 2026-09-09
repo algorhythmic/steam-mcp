@@ -1,4 +1,4 @@
-import type { AxiosInstance } from 'axios';
+import type { SteamHttpClient } from './http.js';
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 
 export const catalogInputSchema = {
@@ -27,9 +27,9 @@ type CatalogPage = { applist: { apps: App[] }; has_more: boolean; next_cursor?: 
 export class Catalog {
     private cache = new Map<string, { expires: number; page: CatalogPage }>();
 
-    constructor(private client: AxiosInstance, private now = Date.now) {}
+    constructor(private client: SteamHttpClient, private now = Date.now) {}
 
-    async list(input: unknown): Promise<CatalogPage> {
+    async list(input: unknown, signal?: AbortSignal): Promise<CatalogPage> {
         const args = input ?? {};
         if (typeof args !== 'object' || Array.isArray(args)) {
             throw new McpError(ErrorCode.InvalidParams, 'getAppList expects an object.');
@@ -57,7 +57,7 @@ export class Catalog {
             this.cache.set(key, cached);
             return structuredClone(cached.page);
         }
-        const { data } = await this.client.get('/IStoreService/GetAppList/v1/', { params });
+        const { data } = await this.client.get('/IStoreService/GetAppList/v1/', { params, signal });
         const apps = data?.response?.apps;
         if (!Array.isArray(apps) || !apps.every(app => Number.isInteger(app?.appid) && app.appid > params.last_appid && typeof app.name === 'string')) {
             throw new McpError(ErrorCode.InternalError, 'Steam returned an invalid app catalog page.');
