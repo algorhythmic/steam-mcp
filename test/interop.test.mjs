@@ -5,7 +5,7 @@ import { createHarness } from './helpers.mjs';
 const steamid = '76561198000000000';
 const cases = [
     ['getCurrentPlayers', { appid: 570 }, { response: { player_count: 42, result: 1 } }],
-    ['getAppList', {}, { applist: { apps: [{ appid: 570, name: 'Dota 2' }] } }],
+    ['getAppList', {}, { applist: { apps: [{ appid: 570, name: 'Dota 2' }] }, has_more: false }],
     ['getGameSchema', { appid: 570 }, { game: { gameName: 'Dota 2', gameVersion: '1', availableGameStats: {} } }],
     ['getAppDetails', { appids: [570] }, { 570: { success: true, data: { name: 'Dota 2' } } }],
     ['getGameNews', { appid: 570 }, { appnews: { appid: 570, newsitems: [], count: 0 } }],
@@ -18,7 +18,7 @@ const cases = [
 
 for (const [name, args, data] of cases) {
     test(`${name} returns structured output accepted by a current MCP client`, async t => {
-        const { call, tools, client } = await createHarness(t, () => data);
+        const { call, tools, client } = await createHarness(t, () => name === 'getAppList' ? { response: { apps: data.applist.apps, have_more_results: false } } : data);
         assert.equal(tools.length, 10);
         assert.equal(client.getServerCapabilities().resources, undefined);
         const result = await call(name, args);

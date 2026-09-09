@@ -1,3 +1,4 @@
+import { Catalog, catalogInputSchema } from './catalog.js';
 import { describeError, logError } from './errors.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -141,6 +142,7 @@ export class SteamMcpServer {
     private server: Server;
     private axiosInstance: AxiosInstance;
     private storeInstance: AxiosInstance;
+    private catalog: Catalog;
 
     constructor(private readonly apiKey: string, clients: { webApi?: AxiosInstance; store?: AxiosInstance } = {}) {
         this.server = new Server(
@@ -166,6 +168,7 @@ export class SteamMcpServer {
             }
         });
         this.storeInstance = clients.store ?? axios.create();
+        this.catalog = new Catalog(this.axiosInstance);
         this.setupToolHandlers();
 
         // Basic error handling and graceful shutdown
@@ -200,11 +203,18 @@ export class SteamMcpServer {
                 // New: getAppList
                 {
                     name: 'getAppList',
-                    description: 'Retrieves the complete list of public applications (games, software, etc.) available on Steam.',
-                    inputSchema: { type: 'object', properties: {}, description: "No arguments required." },
-                    // Based on ISteamApps/GetAppList/v2
+                    description: 'Lists one bounded page of Steam store apps. Use next_cursor to continue; filter by app type or modification time.',
+                    inputSchema: catalogInputSchema,
+                    // Based on IStoreService/GetAppList/v1
                     outputSchema: {
-                        type: 'object', properties: { applist: { type: 'object', properties: { apps: { type: 'array', items: { type: 'object', properties: { appid: { type: 'integer' }, name: { type: 'string' } }, required: ['appid', 'name'] } } }, required: ['apps'] } }, required: ['applist']
+                        type: 'object',
+                        properties: {
+                            applist: { type: 'object', properties: { apps: { type: 'array', items: {
+                                type: 'object', properties: { appid: { type: 'integer' }, name: { type: 'string' } }, required: ['appid', 'name'],
+                            } } }, required: ['apps'] },
+                            has_more: { type: 'boolean' },
+                            next_cursor: { type: 'integer' },
+                        }, required: ['applist', 'has_more'],
                     }
                 },
                 // New: getGameSchema
@@ -684,13 +694,7 @@ export class SteamMcpServer {
     }
 
     private async handleGetAppList(args: any): Promise<McpToolResponse> {
-        // No arguments expected or validated for this tool
-        const response = await this.axiosInstance.get<any>( // Use 'any' for now, define interface later if needed
-            '/ISteamApps/GetAppList/v2/'
-            // No extra params needed, API key is added automatically
-        );
-        // This endpoint doesn't have a 'result' code in the response, assume success if no error
-        return this.formatSuccessResponse(response.data);
+        return this.formatSuccessResponse(await this.catalog.list(args));
     }
 
     private async handleGetGameSchema(args: any): Promise<McpToolResponse> {

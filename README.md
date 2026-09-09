@@ -69,7 +69,7 @@ The server will start and listen for MCP messages on standard input/output.
 This server provides the following tools based on the Steam Web API:
 
 *   `getCurrentPlayers`: Retrieves the current number of players for a given AppID.
-*   `getAppList`: Retrieves the complete list of public applications on Steam.
+*   `getAppList`: Lists a page of Steam store apps (default 20, maximum 100). Pass `next_cursor` back as `cursor` to continue. Optional `include_games`, `include_dlc`, `include_software`, `include_videos`, `include_hardware`, and `if_modified_since` filters are supported. Pages are cached for five minutes; only games are included by default.
 *   `getGameSchema`: Retrieves the game schema (stats, achievements) for a given AppID.
 *   `getAppDetails`: Retrieves store page details for one or more AppIDs.
 *   `getGameNews`: Retrieves the latest news items for a given AppID.
